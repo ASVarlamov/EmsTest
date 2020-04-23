@@ -60,6 +60,7 @@ public:
 	HttpRequestHandler onRequestComplete;
 
 	emscripten_fetch_t* currentFetch = nullptr;
+	const char* currentRequestData = nullptr;
 
 	void OnReadHeaders(const HttpHeadersHandler& handler, HttpError ec) {
 		if (IsRunning()) {
@@ -75,7 +76,7 @@ public:
 	void QueryAsync(const Request& request, const HttpRequestHandler &handler) {
 		onRequestComplete = handler;
 
-		std::string content;
+		std::string content = "";
 
 		std::cout << "Start async " << request.url.c_str() << endl;
 
@@ -93,10 +94,10 @@ public:
 		strcpy(attr.requestMethod, method);
 		attr.attributes = EMSCRIPTEN_FETCH_LOAD_TO_MEMORY | EMSCRIPTEN_FETCH_APPEND;
 
-		char* req_data = (char*)content.c_str();
+		currentRequestData = content.c_str();
 
-		attr.requestData = req_data;
-		attr.requestDataSize = strlen(attr.requestData);
+		attr.requestData = currentRequestData;
+		attr.requestDataSize = strlen(currentRequestData);
 
 		cout << "Set request data(size: " << attr.requestDataSize << "): " << attr.requestData << endl;
 
@@ -127,9 +128,6 @@ public:
 		cout << "Start fetch(" << currentFetch->id << "): " << currentFetch->url << endl;
 	}
 
-	void CallAsync(const Request& httpRequest) {
-	}
-
 	void Cancel() {
 		if (IsRunning()) {
 			cout << "Cancel fetch(" << currentFetch->id << "): " << currentFetch->url << endl;
@@ -139,6 +137,7 @@ public:
 		}
 
 		currentFetch = nullptr;
+		currentRequestData = nullptr;
 	}
 
 	bool IsRunning() {
@@ -267,6 +266,7 @@ public:
 				callbacks.erase(fetch_id);
 				cout << "OnSuccess. Remove request info(" << fetch_id << ")" << endl;
 				client->currentFetch = nullptr;
+				client->currentRequestData = nullptr;
 				cout << "OnSuccess. Close(" << fetch_id << ")" << endl;
 				client->onRequestComplete(ec, response);
 				cout << "OnSuccess. OnComplete(" << fetch_id << ")" << endl;
@@ -295,6 +295,7 @@ public:
 				cout << "OnFail. Data received(" << fetch_id << ")" << (char*)response.resp_data << " - " << fetch->status << " - " << fetch->url << endl;
 
 				client->currentFetch = nullptr;
+				client->currentRequestData = nullptr;
 				cout << "OnFail. Fetch null(" << fetch_id << ")" << endl;
 
 				callbacks.erase(fetch_id);
@@ -312,24 +313,62 @@ public:
 
 void OnResult(HttpError ec, Response& realResponse);
 
-void callRandomFetch() {
+void callUsers() {
 	EmsFetch* fetch_client = new EmsFetch();
 
 	Request req;
 	req.method = "POST";
-	req.url = cuurent_choice ? "https://web.playrix.com/nodeapps/404" : "https://web.playrix.com/nodeapps/hsfb-dev/api/Auth";
+	req.url = "https://reqres.in/api/users";
 
-	cuurent_choice = !cuurent_choice;
-
+	req.headers.insert({ "Content-Type", "application/json" });
 	req.headers.insert({ "x-test", "abcdefgh" });
 	req.headers.insert({ "x-test_2", "123467890" });
-	req.data = "{'test':'test_json', 'test_2':'TEST:DEBUG'}";
+	const char* str_data = u8"{'name': 'morpheus','job' : 'leader'}";
+	req.data = str_data;
+
+	fetch_client->QueryAsync(req, OnResult);
+}
+void callRegister() {
+	EmsFetch* fetch_client = new EmsFetch();
+
+	Request req;
+	req.method = "POST";
+	req.url = "https://reqres.in/api/register";
+
+	req.headers.insert({ "Content-Type", "application/json" });
+	req.headers.insert({ "x-test", "abcdefgh" });
+	req.headers.insert({ "x-test_2", "123467890" });
+	const char* str_data = "{'email': 'morpheus@matrix.com','password' : 'leader'}";
+	req.data = str_data;
 
 	fetch_client->QueryAsync(req, OnResult);
 }
 
+void callCountry() {
+	EmsFetch* fetch_client = new EmsFetch();
+
+	Request req;
+	req.method = "POST";
+	req.url = "https://get.geojs.io/v1/ip/country";
+
+	const char* str_data = "{'sample_field1': 'sample_data1','sample_field2' : 'sample_data2'}";
+	req.data = str_data;
+
+	fetch_client->QueryAsync(req, OnResult);
+}
+
+void callRandomFetch() {
+	cuurent_choice = !cuurent_choice;
+	if (cuurent_choice) {
+		callCountry();
+	}
+	else {
+		callUsers();
+	}
+}
+
 void OnResult(HttpError ec, Response& realResponse) {
-	std::cout << realResponse.resp_data;
+	std::cout << "Result received" << ec << " " << realResponse.resp_data << endl;
 	emscripten_sleep(2000);
 	callRandomFetch();
 }
@@ -337,7 +376,6 @@ void OnResult(HttpError ec, Response& realResponse) {
 int main()
 {
     std::cout << "Hello World!\n";
-
 	callRandomFetch();
 }
 

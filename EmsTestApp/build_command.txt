@@ -1,1 +1,1 @@
-emcc -Wc++11-extensions EmsTestApp.cpp -o build/EmsErrorTest.html -std=c++11 -s WASM=1 -g -s FETCH=1
+emcc -Wc++11-extensions EmsTestApp.cpp -o build/EmsErrorTest.html -std=c++11 -s WASM=1 -g -s FETCH=1 -s ASYNCIFY=1 -s USE_SDL=2
