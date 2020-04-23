@@ -76,7 +76,7 @@ public:
 	void QueryAsync(const Request& request, const HttpRequestHandler &handler) {
 		onRequestComplete = handler;
 
-		std::string content = "";
+		char* content = (char*)"";
 
 		std::cout << "Start async " << request.url.c_str() << endl;
 
@@ -85,7 +85,7 @@ public:
 
 		method = request.method.c_str();
 		if (request.method == "POST") {
-			content = request.data;
+			strcpy(content, request.data.c_str());
 		}
 
 		emscripten_fetch_attr_t attr;
@@ -94,10 +94,11 @@ public:
 		strcpy(attr.requestMethod, method);
 		attr.attributes = EMSCRIPTEN_FETCH_LOAD_TO_MEMORY | EMSCRIPTEN_FETCH_APPEND;
 
-		currentRequestData = content.c_str();
+		//currentRequestData = content;;
 
-		attr.requestData = currentRequestData;
-		attr.requestDataSize = strlen(currentRequestData);
+		//attr.requestData = "{'sample_field1': 'sample_data1','sample_field2' : 'sample_data2'}";
+		attr.requestData = content;
+		attr.requestDataSize = strlen(content);
 
 		cout << "Set request data(size: " << attr.requestDataSize << "): " << attr.requestData << endl;
 

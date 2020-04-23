@@ -152,11 +152,7 @@
     </Link>
   </ItemDefinitionGroup>
   <ItemGroup>
-    <ClCompile Include="EmsFetch.cpp" />
     <ClCompile Include="EmsTestApp.cpp" />
-  </ItemGroup>
-  <ItemGroup>
-    <ClInclude Include="EmsFetch.h" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">
