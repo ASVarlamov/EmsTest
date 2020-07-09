@@ -5,12 +5,31 @@
 #include <map>
 #include <emscripten/fetch.h>
 #include <emscripten.h>
+#include <emscripten/bind.h>
 
 using namespace std;
 
 static bool cuurent_choice = false;
 class EmsFetch;
 static std::map<uint32_t, EmsFetch*> callbacks;
+
+using namespace emscripten;
+
+void OnSuccess(int pointer, int length) {
+	const uint8_t* data_bytes = (const uint8_t*)pointer;
+
+	std::vector<uint8_t> vec;
+	vec.insert(vec.end(), data_bytes, data_bytes + length);
+
+	std::string data = std::string((const char*)data_bytes, (const char*)(data_bytes + length));
+
+	std::cout << "Data OnSuccess: " << data << endl;
+	std::cout << "Data OnSuccess2: " << length << endl;
+}
+
+EMSCRIPTEN_BINDINGS(Test) {
+	emscripten::function("OnSuccess", &OnSuccess);
+}
 
 enum HttpError {
 	None,
@@ -206,6 +225,8 @@ public:
 
 		emscripten_fetch_get_response_headers(fetch, headerString, headersLengthBytes);
 		cout << "GetHeaders. (" << fetch->id << "): " << " , url = " << fetch->url << " , response: " << headerString << endl;
+
+		std::string headers_string = std::string(headerString);
 
 		char **responseHeaders = emscripten_fetch_unpack_response_headers(headerString);
 
