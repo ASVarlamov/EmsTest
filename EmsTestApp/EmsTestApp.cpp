@@ -5,7 +5,16 @@
 #include <map>
 #include <emscripten/fetch.h>
 #include <emscripten.h>
-#include <emscripten/bind.h>
+#include <fstream>
+#include <string>
+#include <vector>
+#include <fcntl.h>
+
+#include "IndexedDBFileSystem.h"
+
+std::string bool_cast(const bool b) {
+	return b ? "true" : "false";
+}
 
 using namespace std;
 
@@ -13,23 +22,40 @@ static bool cuurent_choice = false;
 class EmsFetch;
 static std::map<uint32_t, EmsFetch*> callbacks;
 
-using namespace emscripten;
+static bool localStorageInited = false;
+static void LocalStorageInit()
+{
+	if (localStorageInited) return;
 
-void OnSuccess(int pointer, int length) {
-	const uint8_t* data_bytes = (const uint8_t*)pointer;
+	EM_ASM(
+		console.log('LocalStorageInit');
+		FS.mkdir('/cache');
+		FS.mount(IDBFS, {}, '/cache');
+		FS.syncfs(true, function(err) {
+			console.log(err);
+		});
+	);
 
-	std::vector<uint8_t> vec;
-	vec.insert(vec.end(), data_bytes, data_bytes + length);
-
-	std::string data = std::string((const char*)data_bytes, (const char*)(data_bytes + length));
-
-	std::cout << "Data OnSuccess: " << data << endl;
-	std::cout << "Data OnSuccess2: " << length << endl;
+	localStorageInited = true;
 }
 
-EMSCRIPTEN_BINDINGS(Test) {
-	emscripten::function("OnSuccess", &OnSuccess);
-}
+EM_JS(void, saveToIndexDBJS, (const char* filename, const char* bytes, int bytes_count ),
+{
+		console.log(UTF8ToString(filename));
+		console.log('Bytes - ' + bytes);
+		console.log('Size - ' + bytes_count);
+		var stream = FS.open('/cache/' + UTF8ToString(filename), 'w+');
+		var data = new Uint8Array(bytes_count);
+		FS.write(stream, data, 0, bytes_count, 0, /*canOwn=*/false);
+		FS.close(stream);
+
+		FS.syncfs(function(err) {
+
+			//FS.writeFile(UTF8ToString(filename), new ArrayBuffer(bytes, bytes_count));
+		});
+	
+
+});
 
 enum HttpError {
 	None,
@@ -67,10 +93,16 @@ public:
 	uint64_t resp_data_length;
 	HttpHeaders resp_data_headers;
 	int responseCode;
+
+	std::string GetContentString() {
+		return std::string((const char*)resp_data, resp_data_length);
+	}
 };
 
 typedef void(*HttpRequestHandler)(HttpError ec, Response& realResponse);
 typedef void(*HttpHeadersHandler)(HttpError ec, std::map<std::string, std::string> headers);
+
+const std::string db_name = "ems_test_cache";
 
 class EmsFetch
 {
@@ -92,65 +124,102 @@ public:
 		onHeadersReceived = handler;
 	}
 
-	void QueryAsync(const Request& request, const HttpRequestHandler &handler) {
+
+	void QueryAsync(const Request& request, const HttpRequestHandler &handler, bool from_cache = true) {
 		onRequestComplete = handler;
+
 
 		char* content = (char*)"";
 
-		std::cout << "Start async " << request.url.c_str() << endl;
+		std::cout << "Start async(" << request.url << ")" << endl;
 
-		// определение параметров заголовка запроса
-		const char *method = nullptr;
+		if (from_cache) {
+			IndexedFS::FileLoadHandler load_handler = [this, request, handler](bool rs, const char* bytes, int size) {
+				std::cout << "Handler load result: (" << bool_cast(rs) << "): (" << size << ")" << endl;
 
-		method = request.method.c_str();
-		if (request.method == "POST") {
-			strcpy(content, request.data.c_str());
+				if (rs) {
+					Response resp;
+					resp.resp_data = (const uint8_t*)bytes;
+					resp.resp_data_length = size;
+
+					handler(HttpError(), resp);
+				}
+				else {
+					QueryAsync(request, handler, false);
+				}
+			};
+
+			IndexedFS::FileCheckHandler hand = [this, request, handler, load_handler](bool res, bool is_error) {
+				std::cout << "Sync result: (" << bool_cast(res) << ")" << endl;
+
+				if (res) {
+					IndexedFS::LoadFileFromLocalStorageAsync(db_name, request.url.c_str(), load_handler);
+				}
+				else {
+					QueryAsync(request, handler, false);
+				}
+			};
+			IndexedFS::IsFileInLocalStorageAsync(db_name, request.url.c_str(), hand);
 		}
+		else
+		{
+			std::cout << "Sync result: (not found)" << endl;
 
-		emscripten_fetch_attr_t attr;
-		emscripten_fetch_attr_init(&attr);
+			// определение параметров заголовка запроса
+			const char *method = nullptr;
 
-		strcpy(attr.requestMethod, method);
-		attr.attributes = EMSCRIPTEN_FETCH_LOAD_TO_MEMORY | EMSCRIPTEN_FETCH_APPEND;
+			method = request.method.c_str();
+			if (request.method == "POST") {
+				strcpy(content, request.data.c_str());
+			}
 
-		//currentRequestData = content;;
+			emscripten_fetch_attr_t attr;
+			emscripten_fetch_attr_init(&attr);
 
-		//attr.requestData = "{'sample_field1': 'sample_data1','sample_field2' : 'sample_data2'}";
-		attr.requestData = content;
-		attr.requestDataSize = strlen(content);
+			strcpy(attr.requestMethod, method);
+			attr.attributes = EMSCRIPTEN_FETCH_LOAD_TO_MEMORY | EMSCRIPTEN_FETCH_APPEND;
 
-		cout << "Set request data(size: " << attr.requestDataSize << "): " << attr.requestData << endl;
+			//currentRequestData = content;;
 
-		int size = request.headers.size() * 2 + 1;
-		char** custom_headers = new char*[size];
+			//attr.requestData = "{'sample_field1': 'sample_data1','sample_field2' : 'sample_data2'}";
+			attr.requestData = content;
+			attr.requestDataSize = strlen(content);
 
-		int count = 0;
-		for (const auto &header : request.headers) {
-			custom_headers[count++] = (char*)header.first.c_str();
-			custom_headers[count++] = (char*)header.second.c_str();
-			cout << "Add header: " << custom_headers[count - 2] << ": " << custom_headers[count - 1] << endl;
-		}
+			std::string req_data = std::string(attr.requestData, attr.requestDataSize);
 
-		custom_headers[count] = 0;
+			cout << "Set request data(size: " << attr.requestDataSize << "): " << req_data << endl;
 
-		attr.requestHeaders = custom_headers;
+			int size = request.headers.size() * 2 + 1;
+			char** custom_headers = new char*[size];
 
-		attr.onsuccess = OnSuccess;
-		attr.onerror = OnFail;
-		attr.onprogress = OnProgress;
-		attr.onreadystatechange = OnHeaders;
+			int count = 0;
+			for (const auto &header : request.headers) {
+				custom_headers[count++] = (char*)header.first.c_str();
+				custom_headers[count++] = (char*)header.second.c_str();
+				cout << "Add header: " << header.first << ": " << header.second << endl;
+			}
 
-		// or flag EMSCRIPTEN_FETCH_SYNCHRONOUS
-		currentFetch = emscripten_fetch(&attr, request.url.c_str());
+			custom_headers[count] = 0;
 
-		callbacks[currentFetch->id] = this;
+			attr.requestHeaders = custom_headers;
 
-		cout << "Start fetch(" << currentFetch->id << "): " << currentFetch->url << endl;
+			attr.onsuccess = OnSuccess;
+			attr.onerror = OnFail;
+			attr.onprogress = OnProgress;
+			attr.onreadystatechange = OnHeaders;
+
+			// or flag EMSCRIPTEN_FETCH_SYNCHRONOUS
+			currentFetch = emscripten_fetch(&attr, request.url.c_str());
+
+			callbacks[currentFetch->id] = this;
+
+			cout << "Start fetch(" << currentFetch->id << "): " << std::string(currentFetch->url) << endl;
+		}	
 	}
 
 	void Cancel() {
 		if (IsRunning()) {
-			cout << "Cancel fetch(" << currentFetch->id << "): " << currentFetch->url << endl;
+			cout << "Cancel fetch(" << currentFetch->id << "): " << std::string(currentFetch->url) << endl;
 			callbacks[currentFetch->id] = nullptr;
 			//TODO: send Abort to callback
 			emscripten_fetch_close(currentFetch);
@@ -197,21 +266,11 @@ public:
 			callbacks.erase(req);
 			cout << "RemoveRequestInfo. complete(" << request_id << ") " << endl;
 		}
+
+		return false;
 	}
 
-	static void OnProgress(emscripten_fetch_t *fetch) {
-		//Process the partial data stream fetch->data[0] thru fetch->data[fetch->numBytes-1]
-		// This buffer represents the file at offset fetch->dataOffset.
-		cout << "(" << fetch->id << ") Num bytes: " << fetch->numBytes << endl;
-		cout << "(" << fetch->id << ") Data offset: " << fetch->dataOffset << endl;
-		cout << "(" << fetch->id << ") Total bytes: " << fetch->totalBytes << endl;
-		cout << "(" << fetch->id << ") Calc : " << (fetch->dataOffset + fetch->numBytes) * 100.0 / fetch->totalBytes << endl;
-
-		//for (size_t i = 0; i < fetch->numBytes; ++i)
-		//{
-			//Process fetch->data[i];
-		//}
-	}
+	static void OnProgress(emscripten_fetch_t *fetch) {	}
 
 	static HttpHeaders GetHeaders(emscripten_fetch_t *fetch) {
 		if (fetch->readyState != 2) {
@@ -224,7 +283,7 @@ public:
 		char *headerString = new char[headersLengthBytes];
 
 		emscripten_fetch_get_response_headers(fetch, headerString, headersLengthBytes);
-		cout << "GetHeaders. (" << fetch->id << "): " << " , url = " << fetch->url << " , response: " << headerString << endl;
+		cout << "GetHeaders. (" << fetch->id << "): " << " , url = " << std::string(fetch->url) << " , response: " << std::string(headerString) << endl;
 
 		std::string headers_string = std::string(headerString);
 
@@ -253,7 +312,7 @@ public:
 			if (client->onHeadersReceived != nullptr) {
 				HttpHeaders headers = GetHeaders(fetch);
 
-				cout << "OnHeaders. Headers(" << fetch->id << "): " << headers.size() << ", last-mod: " << " , url = " << fetch->url << endl;
+				cout << "OnHeaders. Headers(" << fetch->id << "): " << headers.size() << ", last-mod: " << " , url = " << std::string(fetch->url) << endl;
 
 				client->onHeadersReceived(HttpError::None, headers);
 			}
@@ -262,7 +321,7 @@ public:
 
 	static void OnSuccess(emscripten_fetch_t *fetch) {
 		uint32_t fetch_id = fetch->id;
-		cout << "OnSuccess. Finished downloading(" << fetch_id << "): " << fetch->numBytes << " bytes from URL: " << fetch->url << endl;
+		cout << "OnSuccess. Finished downloading(" << fetch_id << "): " << fetch->numBytes << " bytes from URL: " << std::string(fetch->url) << endl;
 
 		if (IsRequestActive(fetch_id)) {
 			EmsFetch* client = (EmsFetch*)callbacks[fetch_id];
@@ -281,9 +340,20 @@ public:
 				response.responseCode = (fetch->status);
 				response.resp_data = (const uint8_t*)fetch->data;
 				response.resp_data_length = fetch->numBytes;
-				cout << "OnSuccess. Data fetch(" << fetch_id << "): " << (char*)response.resp_data << " - " << fetch->status << " - " << fetch->url << endl;
+				//cout << "OnSuccess. Data fetch(" << fetch_id << "): " << response.GetContentString() << " - " << fetch->status << " - " << std::string(fetch->url) << endl;
+				cout << "OnSuccess. Data fetch(" << fetch_id << "): " << " - " << fetch->status << " - " << std::string(fetch->url) << endl;
+				std::string filename = fetch->url;
+
+				//saveToIndexDBJS(fetch->url, fetch->data, fetch->numBytes);
 
 				response.resp_data_headers = (GetHeaders(fetch));
+
+				IndexedFS::FileSaveHandler save_handler = [filename, fetch_id](bool result) {
+					cout << "OnSaveSuccess(" << fetch_id << "), filename(" << filename << ") result(" << result << ")" << endl;
+				};
+
+				IndexedFS::SaveFileToIndexDBAsync(db_name, filename, (const char*)response.resp_data, response.resp_data_length, save_handler);
+				//IndexedFS::LoadFileFromLocalStorageSync(fetch->url);
 
 				callbacks.erase(fetch_id);
 				cout << "OnSuccess. Remove request info(" << fetch_id << ")" << endl;
@@ -300,7 +370,7 @@ public:
 
 	static void OnFail(emscripten_fetch_t *fetch) {
 		uint32_t fetch_id = fetch->id;
-		cout << "OnFail. Fetch(" << fetch_id << "): " << fetch->url << " failed, HTTP failure status code: " << fetch->status << endl;
+		cout << "OnFail. Fetch(" << fetch_id << "): " << std::string(fetch->url) << " failed, HTTP failure status code: " << fetch->status << endl;
 
 		if (IsRequestActive(fetch_id)) {
 			EmsFetch* client = (EmsFetch*)callbacks[fetch_id];
@@ -314,7 +384,8 @@ public:
 				response.resp_data = (const uint8_t*)fetch->data;
 				response.resp_data_length = fetch->numBytes;
 
-				cout << "OnFail. Data received(" << fetch_id << ")" << (char*)response.resp_data << " - " << fetch->status << " - " << fetch->url << endl;
+				//cout << "OnFail. Data received(" << fetch_id << ")" << response.GetContentString() << " - " << fetch->status << " - " << std::string(fetch->url) << endl;
+				cout << "OnFail. Data received(" << fetch_id << ")" << " - " << fetch->status << " - " << std::string(fetch->url) << endl;
 
 				client->currentFetch = nullptr;
 				client->currentRequestData = nullptr;
@@ -334,6 +405,16 @@ public:
 };
 
 void OnResult(HttpError ec, Response& realResponse);
+
+void callGetRequest(std::string url) {
+	EmsFetch* fetch_client = new EmsFetch();
+
+	Request req;
+	req.method = "GET";
+	req.url = url;
+	
+	fetch_client->QueryAsync(req, OnResult);
+}
 
 void callUsers() {
 	EmsFetch* fetch_client = new EmsFetch();
@@ -365,7 +446,6 @@ void callRegister() {
 
 	fetch_client->QueryAsync(req, OnResult);
 }
-
 void callCountry() {
 	EmsFetch* fetch_client = new EmsFetch();
 
@@ -379,24 +459,45 @@ void callCountry() {
 	fetch_client->QueryAsync(req, OnResult);
 }
 
+static std::vector<std::string> urls{
+	std::string("http://localhost:6931/file_archive.zip"),
+	std::string("http://localhost:6931/file_archive2.zip"),
+	std::string("http://localhost:6931/file_doc_x.docx"),
+	std::string("http://localhost:6931/file_png.png"),
+	std::string("http://localhost:6931/file_txt.txt"),
+	std::string("http://localhost:6931/file_xml.xml")
+};
+
+static int count_reqs = 0;
 void callRandomFetch() {
-	cuurent_choice = !cuurent_choice;
-	if (cuurent_choice) {
-		callCountry();
-	}
-	else {
-		callUsers();
+
+	callGetRequest(urls[count_reqs]);
+
+	count_reqs++;
+	if (count_reqs >= urls.size()) {
+		count_reqs = 0;
 	}
 }
 
 void OnResult(HttpError ec, Response& realResponse) {
-	std::cout << "Result received" << ec << " " << realResponse.resp_data << endl;
+	//std::cout << "Result received" << ec << " " << realResponse.GetContentString() << endl;
+	std::cout << "Result received" << ec << " " << endl;
 	emscripten_sleep(2000);
 	callRandomFetch();
 }
 
+
 int main()
 {
+	//http://localhost:6931/file_archive.zip
+	//http://localhost:6931/file_archive2.zip
+	//http://localhost:6931/file_doc_x.docx
+	//http://localhost:6931/file_png.png
+	//http://localhost:6931/file_txt.txt
+	//http://localhost:6931/file_xml.xml
+
+
+	//LocalStorageInit();
     std::cout << "Hello World!\n";
 	callRandomFetch();
 }

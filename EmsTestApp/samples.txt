@@ -30,3 +30,109 @@ let bytes = strToUtf8Bytes("testing test 1212121");
 var ptr = _malloc(bytes.length);
 HEAPU8.set(new Uint8Array(bytes), ptr);
 Module.OnSuccess(ptr, bytes.length);
+
+
+3. Binding
+
+
+static void IndexedDBCallback() {
+}
+
+EMSCRIPTEN_BINDINGS(Http) {
+	emscripten::function("OnIndexedDBCallback", &IndexedDBCallback);
+}
+
+
+4. Init IndexedDB store
+static void LocalStorageInit()
+{
+	if (localStorageInited) return;
+
+	EM_ASM(
+		console.log('LocalStorageInit');
+		FS.mkdir('/file_cache');
+		FS.mount(IDBFS, {}, '/file_cache');
+		FS.syncfs(true, function(err) {
+			console.log(err);
+		});
+	);
+
+	localStorageInited = true;
+}
+
+5. Open File
+int fd = open(filename.c_str(), O_RDWR | O_CREAT, 0666);
+	if (fd != -1) {
+
+		write(fd, file_data, size);
+		close(fd);
+
+		EM_ASM(
+			FS.syncfs(function(err) {
+			console.log('SaveHeadersToLocalStorage saved');
+		});
+		);
+
+		LOG_DEBUG("SaveHeadersToLocalStorage " << file_name << " ok!");
+	}
+	else {
+		LOG_DEBUG("SaveHeadersToLocalStorage " << file_name << " error!");
+	}
+	
+6.Is file in storage
+
+	int fd = open(filename.c_str(), O_RDONLY);
+	if (fd != -1) {
+		close(fd);
+		return true;
+	}
+	return false;
+	
+	
+	
+7. Load file
+	FILE* file = fopen(filename.c_str(), "rb");
+	if (file != nullptr)
+	{
+		fseek(file, 0, SEEK_END);
+		int length = ftell(file);
+		//int length = (int)file.tellg();
+
+		LOG_DEBUG("LoadHeadersFromLocalStorage length " << length);
+
+		file_data.resize(length);
+		rewind(file);
+		fread(&file_data[0], 1, length, file);
+		fclose(file);
+
+		LOG_DEBUG("LoadHeadersFromLocalStorage " << filename << " ok!");
+
+		return true;
+	}
+
+	return false;
+	
+	
+8. Is file in cache
+		bool file_cached = IsFileInLocalStorage(request.GetUrl());
+		if (file_cached) {
+			std::vector<uint8_t> file_data;
+			bool result = LoadFileFromLocalStorage(request.GetUrl(), file_data);
+			if (result) {
+				HttpHeaders response_headers;
+				response_headers["content-length"] = file_data.size();
+
+				if (_onHeadersReceived != nullptr) {
+					_onHeadersReceived(200, response_headers);
+				}
+
+				HttpResponse response = HttpResponse();
+				response.AppendContent(file_data.data(), file_data.size());
+				response.SetHeaders(response_headers);
+				response.SetStatusCode(200);
+				_currentRequest = HttpRequest();
+				auto ec = MakeErrorCode();
+				h(ec, response);
+				return;
+			}
+		}

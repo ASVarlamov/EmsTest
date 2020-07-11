@@ -1,2 +1,6 @@
-emcc -Wc++11-extensions EmsTestApp.cpp -o build/EmsErrorTest.html -std=c++11 -s WASM=1 -g -s FETCH=1 -s ASYNCIFY=1 -s USE_SDL=2 -bind
+emcc -Wc++11-extensions EmsTestApp.cpp IndexedDBFileSystem.cpp -o build/EmsErrorTest.html -std=c++11 -s WASM=1 -g -s FETCH=1 -s ASYNCIFY=1 -s USE_SDL=2 -s FORCE_FILESYSTEM=1 -lidbfs.js -s ALLOW_MEMORY_GROWTH=1
+
 emrun --serve_after_close build/EmsErrorTest.html
+
+//FULL DEBUG MODE
+emcc -Wc++11-extensions EmsTestApp.cpp IndexedDBFileSystem.cpp -o build/EmsErrorTest.html -std=c++1z -s WASM=1 -s FETCH=1 -s ASYNCIFY=1 -s FORCE_FILESYSTEM=1 -lidbfs.js -g4 -s ALLOW_MEMORY_GROWTH=1 -s ASSERTIONS=2 -s SAFE_HEAP=1 -s STACK_OVERFLOW_CHECK=1 --source-map-base http://localhost:6931/
